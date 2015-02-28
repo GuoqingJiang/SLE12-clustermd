@@ -2469,7 +2469,7 @@ static void sync_sbs(struct mddev * mddev, int nospares)
 	}
 }
 
-static void md_update_sb(struct mddev * mddev, int force_change)
+void md_update_sb(struct mddev * mddev, int force_change)
 {
 	struct md_rdev *rdev;
 	int sync_req;
@@ -2635,6 +2635,7 @@ rewrite:
 		wake_up(&rdev->blocked_wait);
 	}
 }
+EXPORT_SYMBOL(md_update_sb);
 
 /* words written to sysfs files may, or may not, be \n terminated.
  * We want to accept with case. For this we use cmd_match.
@@ -3443,7 +3444,7 @@ static void analyze_sbs(struct mddev * mddev)
 			kick_rdev_from_array(rdev);
 			continue;
 		}
-		if (rdev != freshest)
+		if (rdev != freshest) {
 			if (super_types[mddev->major_version].
 			    validate_super(mddev, rdev)) {
 				printk(KERN_WARNING "md: kicking non-fresh %s"
@@ -3452,6 +3453,15 @@ static void analyze_sbs(struct mddev * mddev)
 				kick_rdev_from_array(rdev);
 				continue;
 			}
+			/* No device should have a Candidate flag
+			 * when reading devices
+			 */
+			if (test_bit(Candidate, &rdev->flags)) {
+				pr_info("md: kicking Cluster Candidate %s from array!\n",
+					bdevname(rdev->bdev, b));
+				kick_rdev_from_array(rdev);
+			}
+		}
 		if (mddev->level == LEVEL_MULTIPATH) {
 			rdev->desc_nr = i++;
 			rdev->raid_disk = rdev->desc_nr;
@@ -5855,6 +5865,13 @@ static int add_new_disk(struct mddev * mddev, mdu_disk_info_t *info)
 	struct md_rdev *rdev;
 	dev_t dev = MKDEV(info->major,info->minor);
 
+	if (mddev_is_clustered(mddev) &&
+		!(info->state & ((1 << MD_DISK_CLUSTER_ADD) | (1 << MD_DISK_CANDIDATE)))) {
+		pr_err("%s: Cannot add to clustered mddev.\n",
+			       mdname(mddev));
+		return -EINVAL;
+	}
+
 	if (info->major != MAJOR(dev) || info->minor != MINOR(dev))
 		return -EOVERFLOW;
 
@@ -5945,6 +5962,29 @@ static int add_new_disk(struct mddev * mddev, mdu_disk_info_t *info)
 		else
 			clear_bit(FailFast, &rdev->flags);
 
+		/*
+		 * check whether the device shows up in other nodes
+		 */
+		if (mddev_is_clustered(mddev)) {
+			if (info->state & (1 << MD_DISK_CANDIDATE)) {
+				/* Through --cluster-confirm */
+				set_bit(Candidate, &rdev->flags);
+				err = md_cluster_ops->new_disk_ack(mddev, true);
+				if (err) {
+					export_rdev(rdev);
+					return err;
+				}
+			} else if (info->state & (1 << MD_DISK_CLUSTER_ADD)) {
+				/* --add initiated by this node */
+				err = md_cluster_ops->add_new_disk_start(mddev, rdev);
+				if (err) {
+					md_cluster_ops->add_new_disk_finish(mddev);
+					export_rdev(rdev);
+					return err;
+				}
+			}
+		}
+
 		rdev->raid_disk = -1;
 		err = bind_rdev_to_array(rdev, mddev);
 		if (!err && !mddev->pers->hot_remove_disk) {
@@ -5970,6 +6010,9 @@ static int add_new_disk(struct mddev * mddev, mdu_disk_info_t *info)
 		if (!err)
 			md_new_event(mddev);
 		md_wakeup_thread(mddev->thread);
+		if (mddev_is_clustered(mddev) &&
+				(info->state & (1 << MD_DISK_CLUSTER_ADD)))
+			md_cluster_ops->add_new_disk_finish(mddev);
 		return err;
 	}
 
@@ -6806,6 +6849,13 @@ static int md_ioctl(struct block_device *bdev, fmode_t mode,
 			err = add_new_disk(mddev, &info);
 		goto done_unlock;
 	}
+
+	case CLUSTERED_DISK_NACK:
+		if (mddev_is_clustered(mddev))
+			md_cluster_ops->new_disk_ack(mddev, false);
+		else
+			err = -EINVAL;
+		goto done_unlock;
 
 	case HOT_ADD_DISK:
 		err = hot_add_disk(mddev, new_decode_dev(arg));
