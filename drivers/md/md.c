@@ -2748,12 +2748,16 @@ state_store(struct md_rdev *rdev, const char *buf, size_t len)
 			err = -EBUSY;
 		else {
 			struct mddev *mddev = rdev->mddev;
+			if (mddev_is_clustered(mddev))
+			    md_cluster_ops->metadata_update_start(mddev);
 			kick_rdev_from_array(rdev);
 			if (mddev->pers) {
 				set_bit(MD_CHANGE_DEVS, &mddev->flags);
 				md_wakeup_thread(mddev->thread);
 			}
 			md_new_event(mddev);
+			if (mddev_is_clustered(mddev))
+			    md_cluster_ops->metadata_update_finish(mddev);
 			err = 0;
 		}
 	} else if (cmd_match(buf, "writemostly")) {
@@ -4201,8 +4205,12 @@ size_store(struct mddev *mddev, const char *buf, size_t len)
 	if (err < 0)
 		return err;
 	if (mddev->pers) {
+		if (mddev_is_clustered(mddev))
+			md_cluster_ops->metadata_update_start(mddev);
 		err = update_size(mddev, sectors);
 		md_update_sb(mddev, 1);
+		if (mddev_is_clustered(mddev))
+			md_cluster_ops->metadata_update_finish(mddev);
 	} else {
 		if (mddev->dev_sectors == 0 ||
 		    mddev->dev_sectors > sectors)
@@ -5373,6 +5381,8 @@ static void md_clean(struct mddev *mddev)
 
 static void __md_stop_writes(struct mddev *mddev)
 {
+	if (mddev_is_clustered(mddev))
+		md_cluster_ops->metadata_update_start(mddev);
 	set_bit(MD_RECOVERY_FROZEN, &mddev->recovery);
 	if (mddev->sync_thread) {
 		set_bit(MD_RECOVERY_INTR, &mddev->recovery);
@@ -5391,6 +5401,8 @@ static void __md_stop_writes(struct mddev *mddev)
 		mddev->in_sync = 1;
 		md_update_sb(mddev, 1);
 	}
+	if (mddev_is_clustered(mddev))
+		md_cluster_ops->metadata_update_finish(mddev);
 }
 
 void md_stop_writes(struct mddev *mddev)
@@ -6018,6 +6030,9 @@ static int hot_remove_disk(struct mddev * mddev, dev_t dev)
 	if (!rdev)
 		return -ENXIO;
 
+	if (mddev_is_clustered(mddev))
+		md_cluster_ops->metadata_update_start(mddev);
+
 	clear_bit(Blocked, &rdev->flags);
 	remove_and_add_spares(mddev, rdev);
 
@@ -6032,8 +6047,13 @@ static int hot_remove_disk(struct mddev * mddev, dev_t dev)
 		md_update_sb(mddev, 1);
 	md_new_event(mddev);
 
+	if (mddev_is_clustered(mddev))
+		md_cluster_ops->metadata_update_finish(mddev);
+
 	return 0;
 busy:
+	if (mddev_is_clustered(mddev))
+		md_cluster_ops->metadata_update_cancel(mddev);
 	printk(KERN_WARNING "md: cannot remove active disk %s from %s ...\n",
 		bdevname(rdev->bdev,b), mdname(mddev));
 	return -EBUSY;
@@ -6083,12 +6103,15 @@ static int hot_add_disk(struct mddev * mddev, dev_t dev)
 		err = -EINVAL;
 		goto abort_export;
 	}
+
+	if (mddev_is_clustered(mddev))
+		md_cluster_ops->metadata_update_start(mddev);
 	clear_bit(In_sync, &rdev->flags);
 	rdev->desc_nr = -1;
 	rdev->saved_raid_disk = -1;
 	err = bind_rdev_to_array(rdev, mddev);
 	if (err)
-		goto abort_export;
+		goto abort_clustered;
 
 	/*
 	 * The rest should better be atomic, we can have disk failures
@@ -6099,6 +6122,8 @@ static int hot_add_disk(struct mddev * mddev, dev_t dev)
 
 	md_update_sb(mddev, 1);
 
+	if (mddev_is_clustered(mddev))
+		md_cluster_ops->metadata_update_finish(mddev);
 	/*
 	 * Kick recovery, maybe this spare has to be added to the
 	 * array immediately.
@@ -6108,6 +6133,9 @@ static int hot_add_disk(struct mddev * mddev, dev_t dev)
 	md_new_event(mddev);
 	return 0;
 
+abort_clustered:
+	if (mddev_is_clustered(mddev))
+		md_cluster_ops->metadata_update_cancel(mddev);
 abort_export:
 	export_rdev(rdev);
 	return err;
@@ -6403,6 +6431,8 @@ static int update_array_info(struct mddev *mddev, mdu_array_info_t *info)
 			return rv;
 		}
 	}
+	if (mddev_is_clustered(mddev))
+		md_cluster_ops->metadata_update_start(mddev);
 	if (info->size >= 0 && mddev->dev_sectors / 2 != info->size)
 		rv = update_size(mddev, (sector_t)info->size * 2);
 
@@ -6410,17 +6440,25 @@ static int update_array_info(struct mddev *mddev, mdu_array_info_t *info)
 		rv = update_raid_disks(mddev, info->raid_disks);
 
 	if ((state ^ info->state) & (1<<MD_SB_BITMAP_PRESENT)) {
-		if (mddev->pers->quiesce == NULL)
-			return -EINVAL;
-		if (mddev->recovery || mddev->sync_thread)
-			return -EBUSY;
+		if (mddev->pers->quiesce == NULL) {
+			rv = -EINVAL;
+			goto err;
+		}
+		if (mddev->recovery || mddev->sync_thread) {
+			rv = -EBUSY;
+			goto err;
+		}
 		if (info->state & (1<<MD_SB_BITMAP_PRESENT)) {
 			struct bitmap *bitmap;
 			/* add the bitmap */
-			if (mddev->bitmap)
-				return -EEXIST;
-			if (mddev->bitmap_info.default_offset == 0)
-				return -EINVAL;
+			if (mddev->bitmap) {
+				rv = -EEXIST;
+				goto err;
+			}
+			if (mddev->bitmap_info.default_offset == 0) {
+				rv = -EINVAL;
+				goto err;
+			}
 			mddev->bitmap_info.offset =
 				mddev->bitmap_info.default_offset;
 			mddev->bitmap_info.space =
@@ -6436,10 +6474,14 @@ static int update_array_info(struct mddev *mddev, mdu_array_info_t *info)
 			mddev->pers->quiesce(mddev, 0);
 		} else {
 			/* remove the bitmap */
-			if (!mddev->bitmap)
-				return -ENOENT;
-			if (mddev->bitmap->storage.file)
-				return -EINVAL;
+			if (!mddev->bitmap) {
+				rv = -ENOENT;
+				goto err;
+			}
+			if (mddev->bitmap->storage.file) {
+				rv = -EINVAL;
+				goto err;
+			}
 			mddev->pers->quiesce(mddev, 1);
 			bitmap_destroy(mddev);
 			mddev->pers->quiesce(mddev, 0);
@@ -6447,6 +6489,12 @@ static int update_array_info(struct mddev *mddev, mdu_array_info_t *info)
 		}
 	}
 	md_update_sb(mddev, 1);
+	if (mddev_is_clustered(mddev))
+		md_cluster_ops->metadata_update_finish(mddev);
+	return rv;
+err:
+	if (mddev_is_clustered(mddev))
+		md_cluster_ops->metadata_update_cancel(mddev);
 	return rv;
 }
 
@@ -7524,8 +7572,12 @@ int md_allow_write(struct mddev *mddev)
 		if (mddev->safemode_delay &&
 		    mddev->safemode == 0)
 			mddev->safemode = 1;
+		if (mddev_is_clustered(mddev))
+			md_cluster_ops->metadata_update_start(mddev);
 		spin_unlock_irq(&mddev->write_lock);
 		md_update_sb(mddev, 0);
+		if (mddev_is_clustered(mddev))
+			md_cluster_ops->metadata_update_finish(mddev);
 		sysfs_notify_dirent_safe(mddev->sysfs_state);
 	} else
 		spin_unlock_irq(&mddev->write_lock);
@@ -8064,8 +8116,13 @@ void md_check_recovery(struct mddev *mddev)
 				sysfs_notify_dirent_safe(mddev->sysfs_state);
 		}
 
-		if (mddev->flags & MD_UPDATE_SB_FLAGS)
+		if (mddev->flags & MD_UPDATE_SB_FLAGS) {
+			if (mddev_is_clustered(mddev))
+				md_cluster_ops->metadata_update_start(mddev);
 			md_update_sb(mddev, 0);
+			if (mddev_is_clustered(mddev))
+				md_cluster_ops->metadata_update_finish(mddev);
+		}
 
 		if (test_bit(MD_RECOVERY_RUNNING, &mddev->recovery) &&
 		    !test_bit(MD_RECOVERY_DONE, &mddev->recovery)) {
@@ -8174,6 +8231,8 @@ void md_reap_sync_thread(struct mddev *mddev)
 			set_bit(MD_CHANGE_DEVS, &mddev->flags);
 		}
 	}
+	if (mddev_is_clustered(mddev))
+		md_cluster_ops->metadata_update_start(mddev);
 	if (test_bit(MD_RECOVERY_RESHAPE, &mddev->recovery) &&
 	    mddev->pers->finish_reshape)
 		mddev->pers->finish_reshape(mddev);
@@ -8186,6 +8245,8 @@ void md_reap_sync_thread(struct mddev *mddev)
 			rdev->saved_raid_disk = -1;
 
 	md_update_sb(mddev, 1);
+	if (mddev_is_clustered(mddev))
+		md_cluster_ops->metadata_update_finish(mddev);
 	clear_bit(MD_RECOVERY_RUNNING, &mddev->recovery);
 	clear_bit(MD_RECOVERY_SYNC, &mddev->recovery);
 	clear_bit(MD_RECOVERY_RESHAPE, &mddev->recovery);
