@@ -675,7 +675,7 @@ static void mddev_unlock(struct mddev * mddev)
 	spin_unlock(&pers_lock);
 }
 
-static struct md_rdev *find_rdev_nr_rcu(struct mddev *mddev, int nr)
+struct md_rdev *md_find_rdev_nr_rcu(struct mddev *mddev, int nr)
 {
 	struct md_rdev *rdev;
 
@@ -685,6 +685,7 @@ static struct md_rdev *find_rdev_nr_rcu(struct mddev *mddev, int nr)
 
 	return NULL;
 }
+EXPORT_SYMBOL_GPL(md_find_rdev_nr_rcu);
 
 static struct md_rdev *find_rdev(struct mddev *mddev, dev_t dev)
 {
@@ -2160,11 +2161,11 @@ static int bind_rdev_to_array(struct md_rdev * rdev, struct mddev * mddev)
 		int choice = 0;
 		if (mddev->pers)
 			choice = mddev->raid_disks;
-		while (find_rdev_nr_rcu(mddev, choice))
+		while (md_find_rdev_nr_rcu(mddev, choice))
 			choice++;
 		rdev->desc_nr = choice;
 	} else {
-		if (find_rdev_nr_rcu(mddev, rdev->desc_nr)) {
+		if (md_find_rdev_nr_rcu(mddev, rdev->desc_nr)) {
 			rcu_read_unlock();
 			return -EBUSY;
 		}
@@ -5822,7 +5823,7 @@ static int get_disk_info(struct mddev * mddev, void __user * arg)
 		return -EFAULT;
 
 	rcu_read_lock();
-	rdev = find_rdev_nr_rcu(mddev, info.number);
+	rdev = md_find_rdev_nr_rcu(mddev, info.number);
 	if (rdev) {
 		info.major = MAJOR(rdev->bdev->bd_dev);
 		info.minor = MINOR(rdev->bdev->bd_dev);
