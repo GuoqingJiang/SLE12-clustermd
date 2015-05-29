@@ -265,16 +265,11 @@ static void recover_prep(void *arg)
 {
 }
 
-static void recover_slot(void *arg, struct dlm_slot *slot)
+static void __recover_slot(struct mddev *mddev, int slot)
 {
-	struct mddev *mddev = arg;
 	struct md_cluster_info *cinfo = mddev->cluster_info;
 
-	pr_info("md-cluster: %s Node %d/%d down. My slot: %d. Initiating recovery.\n",
-			mddev->bitmap_info.cluster_name,
-			slot->nodeid, slot->slot,
-			cinfo->slot_number);
-	set_bit(slot->slot - 1, &cinfo->recovery_map);
+	set_bit(slot, &cinfo->recovery_map);
 	if (!cinfo->recovery_thread) {
 		cinfo->recovery_thread = md_register_thread(recover_bitmaps,
 				mddev, "recover");
@@ -284,6 +279,20 @@ static void recover_slot(void *arg, struct dlm_slot *slot)
 		}
 	}
 	md_wakeup_thread(cinfo->recovery_thread);
+}
+
+static void recover_slot(void *arg, struct dlm_slot *slot)
+{
+	struct mddev *mddev = arg;
+	struct md_cluster_info *cinfo = mddev->cluster_info;
+
+	pr_info("md-cluster: %s Node %d/%d down. My slot: %d. Initiating recovery.\n",
+			mddev->bitmap_info.cluster_name,
+			slot->nodeid, slot->slot,
+			cinfo->slot_number);
+	/* deduct one since dlm slot starts from one while the num of
+	 * cluster-md begins with 0 */
+	__recover_slot(mddev, slot->slot - 1);
 }
 
 static void recover_done(void *arg, struct dlm_slot *slots,
