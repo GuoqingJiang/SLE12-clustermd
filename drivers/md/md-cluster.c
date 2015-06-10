@@ -99,7 +99,6 @@ static int dlm_lock_sync(struct dlm_lock_resource *res, int mode)
 {
 	int ret = 0;
 
-	init_completion(&res->completion);
 	ret = dlm_lock(res->ls, mode, &res->lksb,
 			res->flags, res->name, strlen(res->name),
 			0, sync_ast, res, res->bast);
@@ -124,6 +123,7 @@ static struct dlm_lock_resource *lockres_init(struct mddev *mddev,
 	res = kzalloc(sizeof(struct dlm_lock_resource), GFP_KERNEL);
 	if (!res)
 		return NULL;
+	init_completion(&res->completion);
 	res->ls = cinfo->lockspace;
 	res->mddev = mddev;
 	namelen = strlen(name);
@@ -168,7 +168,6 @@ static void lockres_free(struct dlm_lock_resource *res)
 	if (!res)
 		return;
 
-	init_completion(&res->completion);
 	dlm_unlock(res->ls, res->lksb.sb_lkid, 0, &res->lksb, res);
 	wait_for_completion(&res->completion);
 
