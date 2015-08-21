@@ -1520,7 +1520,7 @@ static void status(struct seq_file *seq, struct mddev *mddev)
 }
 
 
-static void error(struct mddev *mddev, struct md_rdev *rdev)
+static void error(struct mddev *mddev, struct md_rdev *rdev, bool writeout)
 {
 	char b[BDEVNAME_SIZE];
 	struct r1conf *conf = mddev->private;

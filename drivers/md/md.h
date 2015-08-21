@@ -487,7 +487,7 @@ struct md_personality
 	/* error_handler must set ->faulty and clear ->in_sync
 	 * if appropriate, and should abort recovery if needed 
 	 */
-	void (*error_handler)(struct mddev *mddev, struct md_rdev *rdev);
+	void (*error_handler)(struct mddev *mddev, struct md_rdev *rdev, bool writeout);
 	int (*hot_add_disk) (struct mddev *mddev, struct md_rdev *rdev);
 	int (*hot_remove_disk) (struct mddev *mddev, struct md_rdev *rdev);
 	int (*spare_active) (struct mddev *mddev);
@@ -659,7 +659,7 @@ static inline void rdev_dec_pending(struct md_rdev *rdev, struct mddev *mddev)
 }
 
 extern void md_unplug(struct blk_plug_cb *cb, bool from_schedule);
-extern void md_reload_sb(struct mddev *mddev);
+extern void md_reload_sb(struct mddev *mddev, int raid_disk);
 extern void md_update_sb(struct mddev *mddev, int force);
 extern void md_kick_rdev_from_array(struct mddev *mddev, struct md_rdev * rdev);
 struct md_rdev *md_find_rdev_nr_rcu(struct mddev *mddev, int nr);

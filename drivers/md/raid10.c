@@ -1757,7 +1757,7 @@ static int enough(struct r10conf *conf, int ignore)
 		_enough(conf, 1, ignore);
 }
 
-static void error(struct mddev *mddev, struct md_rdev *rdev)
+static void error(struct mddev *mddev, struct md_rdev *rdev, bool writeout)
 {
 	char b[BDEVNAME_SIZE];
 	struct r10conf *conf = mddev->private;

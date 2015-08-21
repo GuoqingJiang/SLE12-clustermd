@@ -2040,7 +2040,7 @@ static void raid5_build_block(struct stripe_head *sh, int i, int previous)
 	dev->sector = compute_blocknr(sh, i, previous);
 }
 
-static void error(struct mddev *mddev, struct md_rdev *rdev)
+static void error(struct mddev *mddev, struct md_rdev *rdev, bool writeout)
 {
 	char b[BDEVNAME_SIZE];
 	struct r5conf *conf = mddev->private;
