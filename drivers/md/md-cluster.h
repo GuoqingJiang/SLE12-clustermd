@@ -14,6 +14,7 @@ struct md_cluster_operations {
 	int (*slot_number)(struct mddev *mddev);
 	int (*resync_info_update)(struct mddev *mddev, sector_t lo, sector_t hi);
 	void (*resync_finish)(struct mddev *mddev);
+	void (*resync_bitmap)(struct mddev *mddev);
 	int (*metadata_update_start)(struct mddev *mddev);
 	int (*metadata_update_finish)(struct mddev *mddev);
 	int (*metadata_update_cancel)(struct mddev *mddev);

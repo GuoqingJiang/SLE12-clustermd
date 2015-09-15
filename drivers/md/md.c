@@ -5652,6 +5652,11 @@ static int do_md_stop(struct mddev * mddev, int mode,
 		if (mddev->ro)
 			set_disk_ro(disk, 0);
 
+		/* For cluster raid1, BITMAP_NEEDS_SYNC message should
+		 * be sent when the node is de-activating the array */
+		if (mddev_is_clustered(mddev))
+			md_cluster_ops->resync_bitmap(mddev);
+
 		__md_stop_writes(mddev);
 		__md_stop(mddev);
 		mddev->queue->merge_bvec_fn = NULL;
