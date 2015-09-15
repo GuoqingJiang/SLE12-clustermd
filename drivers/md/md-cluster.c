@@ -887,15 +887,21 @@ static int resync_info_update(struct mddev *mddev, sector_t lo, sector_t hi)
 
 static void resync_finish(struct mddev *mddev)
 {
+	resync_info_update(mddev, 0, 0);
+}
+
+static void resync_bitmap(struct mddev *mddev)
+{
 	struct md_cluster_info *cinfo = mddev->cluster_info;
 	struct cluster_msg cmsg;
+	int err;
 
-	resync_info_update(mddev, 0, 0);
-	if (test_bit(MD_RECOVERY_INTR, &mddev->recovery)) {
-		memset(&cmsg, 0, sizeof(cmsg));
-		cmsg.type = cpu_to_le32(BITMAP_NEEDS_SYNC);
-		sendmsg(cinfo, &cmsg);
-	}
+	memset(&cmsg, 0, sizeof(cmsg));
+	cmsg.type = cpu_to_le32(BITMAP_NEEDS_SYNC);
+	err = sendmsg(cinfo, &cmsg);
+	if (err)
+		pr_err("%s:%d: failed to send BITMAP_NEEDS_SYNC message (%d)\n",
+			__func__, __LINE__, err);
 }
 
 static int area_resyncing(struct mddev *mddev, int direction,
@@ -1021,6 +1027,7 @@ static struct md_cluster_operations cluster_ops = {
 	.slot_number = slot_number,
 	.resync_info_update = resync_info_update,
 	.resync_finish = resync_finish,
+	.resync_bitmap = resync_bitmap,
 	.metadata_update_start = metadata_update_start,
 	.metadata_update_finish = metadata_update_finish,
 	.metadata_update_cancel = metadata_update_cancel,
