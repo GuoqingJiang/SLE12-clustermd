@@ -806,7 +806,19 @@ static int slot_number(struct mddev *mddev)
 
 static int metadata_update_start(struct mddev *mddev)
 {
-	return lock_comm(mddev->cluster_info);
+	u64 events = mddev->events;
+	int ret;
+	ret = lock_comm(mddev->cluster_info);
+	if (ret < 0)
+		return ret;
+
+	/* Does SB need changing? */
+	if (mddev->events > events) {
+		set_bit(MD_CHANGE_DEVS, &mddev->flags);
+		set_bit(MD_CHANGE_PENDING, &mddev->flags);
+	}
+
+	return ret;
 }
 
 static int metadata_update_finish(struct mddev *mddev)
