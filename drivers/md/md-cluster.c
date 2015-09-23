@@ -413,7 +413,7 @@ static void process_add_new_disk(struct mddev *mddev, struct cluster_msg *cmsg)
 
 	len = snprintf(disk_uuid, 64, "DEVICE_UUID=");
 	sprintf(disk_uuid + len, "%pU", cmsg->uuid);
-	snprintf(raid_slot, 16, "RAID_DISK=%d", cmsg->raid_slot);
+	snprintf(raid_slot, 16, "RAID_DISK=%d", le32_to_cpu(cmsg->raid_slot));
 	pr_info("%s:%d Sending kobject change with %s and %s\n", __func__, __LINE__, disk_uuid, raid_slot);
 	init_completion(&cinfo->newdisk_completion);
 	set_bit(MD_CLUSTER_WAITING_FOR_NEWDISK, &cinfo->state);
@@ -438,56 +438,64 @@ static void process_remove_disk(struct mddev *mddev, struct cluster_msg *msg)
 	if (rdev)
 		md_kick_rdev_from_array(mddev, rdev);
 	else
-		pr_warn("%s: %d Could not find disk(%d) to REMOVE\n", __func__, __LINE__, msg->raid_slot);
+		pr_warn("%s: %d Could not find disk(%d) to REMOVE\n",
+			__func__, __LINE__, le32_to_cpu(msg->raid_slot));
 }
 
 static void process_readd_disk(struct mddev *mddev, struct cluster_msg *msg)
 {
-	struct md_rdev *rdev = md_find_rdev_nr_rcu(mddev, msg->raid_slot);
+	struct md_rdev *rdev = md_find_rdev_nr_rcu(mddev, le32_to_cpu(msg->raid_slot));
 
 	if (rdev && test_bit(Faulty, &rdev->flags))
 		clear_bit(Faulty, &rdev->flags);
 	else
-		pr_warn("%s: %d Could not find disk(%d) which is faulty", __func__, __LINE__, msg->raid_slot);
+		pr_warn("%s: %d Could not find disk(%d) which is faulty",
+			__func__, __LINE__, le32_to_cpu(msg->raid_slot));
 }
 
 static void process_recvd_msg(struct mddev *mddev, struct cluster_msg *msg)
 {
+	struct md_cluster_info *cinfo = mddev->cluster_info;
+
+	/* in case the msg is sent to itself by mistake */
+	if (cinfo->slot_number == le32_to_cpu(msg->slot) + 1)
+		return;
+
 	switch (msg->type) {
 	case METADATA_UPDATED:
 		pr_info("%s: %d Received message: METADATA_UPDATE from %d\n",
-			__func__, __LINE__, msg->slot);
+			__func__, __LINE__, le32_to_cpu(msg->slot));
 		process_metadata_update(mddev, msg);
 		break;
 	case RESYNCING:
 		pr_info("%s: %d Received message: RESYNCING from %d\n",
-			__func__, __LINE__, msg->slot);
-		process_suspend_info(mddev, msg->slot,
-				msg->low, msg->high);
+			__func__, __LINE__, le32_to_cpu(msg->slot));
+		process_suspend_info(mddev, le32_to_cpu(msg->slot),
+				le64_to_cpu(msg->low), le64_to_cpu(msg->high));
 		break;
 	case NEWDISK:
 		pr_info("%s: %d Received message: NEWDISK from %d\n",
-			__func__, __LINE__, msg->slot);
+			__func__, __LINE__, le32_to_cpu(msg->slot));
 		process_add_new_disk(mddev, msg);
 		break;
 	case REMOVE:
 		pr_info("%s: %d Received REMOVE from %d\n",
-			__func__, __LINE__, msg->slot);
+			__func__, __LINE__, le32_to_cpu(msg->slot));
 		process_remove_disk(mddev, msg);
 		break;
 	case RE_ADD:
 		pr_info("%s: %d Received RE_ADD from %d\n",
-			__func__, __LINE__, msg->slot);
+			__func__, __LINE__, le32_to_cpu(msg->slot));
 		process_readd_disk(mddev, msg);
 		break;
 	case BITMAP_NEEDS_SYNC:
 		pr_info("%s: %d Received BITMAP_NEEDS_SYNC from %d\n",
-			__func__, __LINE__, msg->slot);
-		__recover_slot(mddev, msg->slot);
+			__func__, __LINE__, le32_to_cpu(msg->slot));
+		__recover_slot(mddev, le32_to_cpu(msg->slot));
 		break;
 	default:
 		pr_warn("%s:%d Received unknown message from %d\n",
-			__func__, __LINE__, msg->slot);
+			__func__, __LINE__, le32_to_cpu(msg->slot));
 	}
 }
 
@@ -617,7 +625,9 @@ static int sendmsg(struct md_cluster_info *cinfo, struct cluster_msg *cmsg)
 {
 	int ret;
 
-	lock_comm(cinfo);
+	ret = lock_comm(cinfo);
+	if (ret)
+		return ret;
 	ret = __sendmsg(cinfo, cmsg);
 	unlock_comm(cinfo);
 	return ret;
@@ -826,9 +836,12 @@ static int metadata_update_finish(struct mddev *mddev)
 			cmsg.raid_slot = cpu_to_le32(rdev->desc_nr);
 			break;
 		}
-	if (cmsg.raid_slot >= 0)
+	if (cmsg.raid_slot >= 0) {
 		ret = __sendmsg(cinfo, &cmsg);
-	else
+		if (ret)
+			pr_err("in %s:%d __sendmsg failed return %d\n",
+				__func__, __LINE__, ret);
+	} else
 		pr_warn("md-cluster: No good device id found to send\n");
 	unlock_comm(cinfo);
 	return ret;
@@ -845,7 +858,6 @@ static int resync_info_update(struct mddev *mddev, sector_t lo, sector_t hi)
 {
 	struct md_cluster_info *cinfo = mddev->cluster_info;
 	struct cluster_msg cmsg;
-	int slot = cinfo->slot_number - 1;
 
 	add_resync_info(mddev, cinfo->bitmap_lockres, lo, hi);
 	/* Re-acquire the lock to refresh LVB */
@@ -854,8 +866,8 @@ static int resync_info_update(struct mddev *mddev, sector_t lo, sector_t hi)
 	pr_info("%s:%d lo: %llu hi: %llu\n", __func__, __LINE__,
 			(unsigned long long)lo,
 			(unsigned long long)hi);
+	memset(&cmsg, 0, sizeof(cmsg));
 	cmsg.type = cpu_to_le32(RESYNCING);
-	cmsg.slot = cpu_to_le32(slot);
 	cmsg.low = cpu_to_le64(lo);
 	cmsg.high = cpu_to_le64(hi);
 	return sendmsg(cinfo, &cmsg);
@@ -865,12 +877,11 @@ static void resync_finish(struct mddev *mddev)
 {
 	struct md_cluster_info *cinfo = mddev->cluster_info;
 	struct cluster_msg cmsg;
-	int slot = cinfo->slot_number - 1;
 
 	resync_info_update(mddev, 0, 0);
 	if (test_bit(MD_RECOVERY_INTR, &mddev->recovery)) {
+		memset(&cmsg, 0, sizeof(cmsg));
 		cmsg.type = cpu_to_le32(BITMAP_NEEDS_SYNC);
-		cmsg.slot = cpu_to_le32(slot);
 		sendmsg(cinfo, &cmsg);
 	}
 }
@@ -910,8 +921,12 @@ static int add_new_disk_start(struct mddev *mddev, struct md_rdev *rdev)
 	memset(&cmsg, 0, sizeof(cmsg));
 	cmsg.type = cpu_to_le32(NEWDISK);
 	memcpy(cmsg.uuid, uuid, 16);
-	cmsg.raid_slot = rdev->desc_nr;
-	lock_comm(cinfo);
+	cmsg.raid_slot = cpu_to_le32(rdev->desc_nr);
+	ret = lock_comm(cinfo);
+	if (ret) {
+		unlock_comm(cinfo);
+		return ret;
+	}
 	ret = __sendmsg(cinfo, &cmsg);
 	if (ret)
 		return ret;
@@ -952,8 +967,9 @@ static int remove_disk(struct mddev *mddev, struct md_rdev *rdev)
 {
 	struct cluster_msg cmsg;
 	struct md_cluster_info *cinfo = mddev->cluster_info;
-	cmsg.type = REMOVE;
-	cmsg.raid_slot = rdev->desc_nr;
+	memset(&cmsg, 0, sizeof(cmsg));
+	cmsg.type = cpu_to_le32(REMOVE);
+	cmsg.raid_slot = cpu_to_le32(rdev->desc_nr);
 	return __sendmsg(cinfo, &cmsg);
 }
 
@@ -965,8 +981,9 @@ static int gather_bitmaps(struct md_rdev *rdev)
 	struct mddev *mddev = rdev->mddev;
 	struct md_cluster_info *cinfo = mddev->cluster_info;
 
-	cmsg.type = RE_ADD;
-	cmsg.raid_slot = rdev->desc_nr;
+	memset(&cmsg, 0, sizeof(cmsg));
+	cmsg.type = cpu_to_le32(RE_ADD);
+	cmsg.raid_slot = cpu_to_le32(rdev->desc_nr);
 	err = sendmsg(cinfo, &cmsg);
 	if (err)
 		goto out;

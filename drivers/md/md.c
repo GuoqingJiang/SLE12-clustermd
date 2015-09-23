@@ -2534,6 +2534,7 @@ void md_update_sb(struct mddev *mddev, int force_change)
 	int sync_req;
 	int nospares = 0;
 	int any_badblocks_changed = 0;
+	int ret = -1;
 
 	if (mddev->ro) {
 		if (force_change)
@@ -2543,9 +2544,10 @@ void md_update_sb(struct mddev *mddev, int force_change)
 
 	if (mddev_is_clustered(mddev)) {
 		/* Someone else has updated the sb for us */
-		md_cluster_ops->metadata_update_start(mddev);
+		ret = md_cluster_ops->metadata_update_start(mddev);
 		if (!does_sb_need_changing(mddev)) {
-			md_cluster_ops->metadata_update_cancel(mddev);
+			if (ret == 0)
+				md_cluster_ops->metadata_update_cancel(mddev);
 			clear_bit(MD_CHANGE_DEVS, &mddev->flags);
 			clear_bit(MD_CHANGE_PENDING, &mddev->flags);
 			return;
@@ -2705,7 +2707,7 @@ rewrite:
 		wake_up(&rdev->blocked_wait);
 	}
 
-	if (mddev_is_clustered(mddev))
+	if (mddev_is_clustered(mddev) && ret == 0)
 		md_cluster_ops->metadata_update_finish(mddev);
 }
 EXPORT_SYMBOL(md_update_sb);
