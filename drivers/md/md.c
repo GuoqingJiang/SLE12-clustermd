@@ -2497,6 +2497,7 @@ void md_update_sb(struct mddev *mddev, int force_change)
 	int sync_req;
 	int nospares = 0;
 	int any_badblocks_changed = 0;
+	int ret = -1;
 
 	if (mddev->ro) {
 		if (force_change)
@@ -2505,9 +2506,10 @@ void md_update_sb(struct mddev *mddev, int force_change)
 	}
 
 	if (mddev_is_clustered(mddev)) {
-		md_cluster_ops->metadata_update_start(mddev);
+		ret = md_cluster_ops->metadata_update_start(mddev);
 		if (!(mddev->flags & MD_UPDATE_SB_FLAGS)) {
-			md_cluster_ops->metadata_update_cancel(mddev);
+			if (ret == 0)
+				md_cluster_ops->metadata_update_cancel(mddev);
 			return;
 		}
 	}
@@ -2664,7 +2666,7 @@ rewrite:
 		clear_bit(BlockedBadBlocks, &rdev->flags);
 		wake_up(&rdev->blocked_wait);
 	}
-	if (mddev_is_clustered(mddev))
+	if (mddev_is_clustered(mddev) && ret == 0)
 		md_cluster_ops->metadata_update_finish(mddev);
 }
 EXPORT_SYMBOL(md_update_sb);
@@ -6130,7 +6132,7 @@ static int hot_remove_disk(struct mddev * mddev, dev_t dev)
 	if (rdev->raid_disk >= 0)
 		goto busy;
 
-	if (mddev_is_clustered(mddev))
+	if (mddev_is_clustered(mddev) && ret == 0)
 		md_cluster_ops->remove_disk(mddev, rdev);
 
 	kick_rdev_from_array(rdev);
