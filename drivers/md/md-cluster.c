@@ -632,11 +632,13 @@ failed_message:
 
 static int sendmsg(struct md_cluster_info *cinfo, struct cluster_msg *cmsg)
 {
-	int ret;
+	int ret = -1;
 
-	lock_comm(cinfo);
-	ret = __sendmsg(cinfo, cmsg);
-	unlock_comm(cinfo);
+	ret = lock_comm(cinfo);
+	if (ret == 0) {
+		ret = __sendmsg(cinfo, cmsg);
+		unlock_comm(cinfo);
+	}
 	return ret;
 }
 
@@ -953,7 +955,9 @@ static int add_new_disk(struct mddev *mddev, struct md_rdev *rdev)
 	cmsg.type = cpu_to_le32(NEWDISK);
 	memcpy(cmsg.uuid, uuid, 16);
 	cmsg.raid_slot = cpu_to_le32(rdev->desc_nr);
-	lock_comm(cinfo);
+	ret = lock_comm(cinfo);
+	if (ret)
+		return ret;
 	ret = __sendmsg(cinfo, &cmsg);
 	if (ret)
 		return ret;
