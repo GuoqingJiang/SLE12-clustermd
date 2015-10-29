@@ -193,6 +193,7 @@ enum flag_bits {
 				 * This device is seen locally but not
 				 * by the whole cluster
 				 */
+	ClusterRemove,
 };
 
 #define BB_LEN_MASK	(0x00000000000001FFULL)
@@ -647,6 +648,7 @@ extern struct bio *bio_clone_mddev(struct bio *bio, gfp_t gfp_mask,
 extern struct bio *bio_alloc_mddev(gfp_t gfp_mask, int nr_iovecs,
 				   struct mddev *mddev);
 extern void md_trim_bio(struct bio *bio, int offset, int size);
+extern void mddev_unlock(struct mddev * mddev);
 
 static inline void rdev_dec_pending(struct md_rdev *rdev, struct mddev *mddev)
 {

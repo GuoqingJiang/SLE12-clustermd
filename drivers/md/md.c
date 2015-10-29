@@ -8376,6 +8376,15 @@ void md_check_recovery(struct mddev *mddev)
 		}
 		mddev_unlock(mddev);
 	}
+
+	if (mddev_is_clustered(mddev)) {
+		struct md_rdev *rdev2;
+		rdev_for_each(rdev2, mddev) {
+			if (test_and_clear_bit(ClusterRemove, &rdev2->flags) &&
+			    rdev2->raid_disk < 0)
+				md_kick_rdev_from_array(rdev2);
+		}
+	}
 }
 
 void md_reap_sync_thread(struct mddev *mddev)
