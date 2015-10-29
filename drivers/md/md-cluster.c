@@ -434,7 +434,11 @@ static void process_add_new_disk(struct mddev *mddev, struct cluster_msg *cmsg)
 static void process_metadata_update(struct mddev *mddev, struct cluster_msg *msg)
 {
 	struct md_cluster_info *cinfo = mddev->cluster_info;
-	md_reload_sb(mddev, le32_to_cpu(msg->raid_slot));
+
+	if (!mutex_lock_interruptible(&mddev->reconfig_mutex)) {
+		md_reload_sb(mddev, le32_to_cpu(msg->raid_slot));
+		mddev_unlock(mddev);
+	}
 	dlm_lock_sync(cinfo->no_new_dev_lockres, DLM_LOCK_CR);
 }
 

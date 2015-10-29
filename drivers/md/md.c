@@ -633,7 +633,7 @@ static inline int mddev_trylock(struct mddev * mddev)
 
 static struct attribute_group md_redundancy_group;
 
-static void mddev_unlock(struct mddev * mddev)
+void mddev_unlock(struct mddev * mddev)
 {
 	if (mddev->to_remove) {
 		/* These cannot be removed under reconfig_mutex as
@@ -675,6 +675,7 @@ static void mddev_unlock(struct mddev * mddev)
 	md_wakeup_thread(mddev->thread);
 	spin_unlock(&pers_lock);
 }
+EXPORT_SYMBOL(mddev_unlock);
 
 static struct md_rdev * find_rdev_nr(struct mddev *mddev, int nr)
 {
