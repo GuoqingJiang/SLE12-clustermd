@@ -47,6 +47,7 @@ struct resync_info {
 #define		MD_CLUSTER_WAITING_FOR_NEWDISK		1
 #define		MD_CLUSTER_SUSPEND_READ_BALANCING	2
 #define		MD_CLUSTER_BEGIN_JOIN_CLUSTER		3
+#define		MD_CLUSTER_COMM_LOCKED			4
 
 
 struct md_cluster_info {
@@ -54,7 +55,7 @@ struct md_cluster_info {
 	dlm_lockspace_t *lockspace;
 	int slot_number;
 	struct completion completion;
-	struct mutex sb_mutex;
+	struct mutex comm_mutex;
 	struct dlm_lock_resource *bitmap_lockres;
 	struct dlm_lock_resource *resync_lockres;
 	struct list_head suspend_list;
@@ -551,8 +552,7 @@ static int lock_comm(struct md_cluster_info *cinfo)
 {
 	int error;
 
-	if (cinfo->token_lockres->mode == DLM_LOCK_EX)
-		return 0;
+	mutex_lock(&cinfo->comm_mutex);
 
 	error = dlm_lock_sync(cinfo->token_lockres, DLM_LOCK_EX);
 	if (error)
@@ -565,6 +565,7 @@ static void unlock_comm(struct md_cluster_info *cinfo)
 {
 	WARN_ON(cinfo->token_lockres->mode != DLM_LOCK_EX);
 	dlm_unlock_sync(cinfo->token_lockres);
+	mutex_unlock(&cinfo->comm_mutex);
 }
 
 /* __sendmsg()
@@ -720,7 +721,7 @@ static int join(struct mddev *mddev, int nodes)
 	init_completion(&cinfo->completion);
 	set_bit(MD_CLUSTER_BEGIN_JOIN_CLUSTER, &cinfo->state);
 
-	mutex_init(&cinfo->sb_mutex);
+	mutex_init(&cinfo->comm_mutex);
 	mddev->cluster_info = cinfo;
 
 	memset(str, 0, 64);
@@ -850,7 +851,14 @@ static int slot_number(struct mddev *mddev)
 
 static int metadata_update_start(struct mddev *mddev)
 {
-	return lock_comm(mddev->cluster_info);
+	struct md_cluster_info *cinfo = mddev->cluster_info;
+	int ret = -1;
+
+	if (test_bit(MD_CLUSTER_COMM_LOCKED, &cinfo->state))
+		return 0;
+	ret = lock_comm(mddev->cluster_info);
+	set_bit(MD_CLUSTER_COMM_LOCKED, &cinfo->state);
+	return ret;
 }
 
 static int metadata_update_finish(struct mddev *mddev)
@@ -875,6 +883,7 @@ static int metadata_update_finish(struct mddev *mddev)
 		ret = __sendmsg(cinfo, &cmsg);
 	} else
 		pr_warn("md-cluster: No good device id found to send\n");
+	clear_bit(MD_CLUSTER_COMM_LOCKED, &cinfo->state);
 	unlock_comm(cinfo);
 	return ret;
 }
@@ -882,6 +891,7 @@ static int metadata_update_finish(struct mddev *mddev)
 static void metadata_update_cancel(struct mddev *mddev)
 {
 	struct md_cluster_info *cinfo = mddev->cluster_info;
+	clear_bit(MD_CLUSTER_COMM_LOCKED, &cinfo->state);
 	unlock_comm(cinfo);
 }
 
@@ -958,6 +968,7 @@ static int add_new_disk(struct mddev *mddev, struct md_rdev *rdev)
 	ret = lock_comm(cinfo);
 	if (ret)
 		return ret;
+	set_bit(MD_CLUSTER_COMM_LOCKED, &cinfo->state);
 	ret = __sendmsg(cinfo, &cmsg);
 	if (ret)
 		return ret;
@@ -977,6 +988,7 @@ static int add_new_disk(struct mddev *mddev, struct md_rdev *rdev)
 static void add_new_disk_cancel(struct mddev *mddev)
 {
 	struct md_cluster_info *cinfo = mddev->cluster_info;
+	clear_bit(MD_CLUSTER_COMM_LOCKED, &cinfo->state);
 	unlock_comm(cinfo);
 }
 
