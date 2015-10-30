@@ -29,6 +29,7 @@ struct dlm_lock_resource {
 	void (*bast)(void *arg, int mode); /* blocking AST function pointer*/
 	struct mddev *mddev; /* pointing back to mddev. */
 	int mode;
+	struct mutex res_lock;
 };
 
 struct suspend_info {
@@ -103,14 +104,19 @@ static int dlm_lock_sync(struct dlm_lock_resource *res, int mode)
 {
 	int ret = 0;
 
+	mutex_lock(&res->res_lock);
+
 	ret = dlm_lock(res->ls, mode, &res->lksb,
 			res->flags, res->name, strlen(res->name),
 			0, sync_ast, res, res->bast);
-	if (ret)
+	if (ret) {
+		mutex_unlock(&res->res_lock);
 		return ret;
+	}
 	wait_for_completion(&res->completion);
 	if (res->lksb.sb_status == 0)
 		res->mode = mode;
+	mutex_unlock(&res->res_lock);
 	return res->lksb.sb_status;
 }
 
@@ -133,6 +139,7 @@ static struct dlm_lock_resource *lockres_init(struct mddev *mddev,
 	res->ls = cinfo->lockspace;
 	res->mddev = mddev;
 	res->mode = DLM_LOCK_IV;
+	mutex_init(&res->res_lock);
 	namelen = strlen(name);
 	res->name = kzalloc(namelen + 1, GFP_KERNEL);
 	if (!res->name) {
