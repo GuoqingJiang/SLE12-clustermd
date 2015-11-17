@@ -244,6 +244,9 @@ struct mddev {
 				 * md_ioctl checked on it.
 				 */
 #define MD_NEED_REWRITE 5	/* metadata write need to be repeated */
+#define MD_RELOAD_SB	6	/* Reload the superblock because another node
+				 * updated it.
+				 */
 
 	int				suspended;
 	atomic_t			active_io;
@@ -467,6 +470,7 @@ struct mddev {
 	struct work_struct event_work;	/* used by dm to report failure event */
 	void (*sync_super)(struct mddev *mddev, struct md_rdev *rdev);
 	struct md_cluster_info		*cluster_info;
+	unsigned int			good_device_nr;	/* good device num within cluster raid */
 };
 
 
