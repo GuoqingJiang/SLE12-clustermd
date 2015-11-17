@@ -193,6 +193,7 @@ enum flag_bits {
 				 * This device is seen locally but not
 				 * by the whole cluster
 				 */
+	ClusterRemove,
 };
 
 #define BB_LEN_MASK	(0x00000000000001FFULL)
