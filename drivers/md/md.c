@@ -7771,6 +7771,7 @@ void md_do_sync(struct md_thread *thread)
 	char *desc, *action = NULL;
 	struct blk_plug plug;
 	bool cluster_resync_finished = false;
+	int ret;
 
 	/* just incase thread restarts... */
 	if (test_bit(MD_RECOVERY_DONE, &mddev->recovery))
@@ -7778,6 +7779,19 @@ void md_do_sync(struct md_thread *thread)
 	if (mddev->ro) {/* never try to sync a read-only array */
 		set_bit(MD_RECOVERY_INTR, &mddev->recovery);
 		return;
+	}
+
+	if (mddev_is_clustered(mddev)) {
+		ret = md_cluster_ops->resync_start(mddev);
+		if (ret)
+			goto skip;
+
+		if (!(test_bit(MD_RECOVERY_SYNC, &mddev->recovery) ||
+			test_bit(MD_RECOVERY_RESHAPE, &mddev->recovery) ||
+			test_bit(MD_RECOVERY_RECOVER, &mddev->recovery))
+		     && ((unsigned long long)mddev->curr_resync_completed
+			 < (unsigned long long)mddev->resync_max_sectors))
+			goto skip;
 	}
 
 	if (test_bit(MD_RECOVERY_SYNC, &mddev->recovery)) {
@@ -8361,13 +8375,6 @@ void md_check_recovery(struct mddev *mddev)
 				 */
 				bitmap_write_all(mddev->bitmap);
 			}
-			if (mddev_is_clustered(mddev)) {
-				int ret = md_cluster_ops->resync_start(mddev);
-				if (ret) {
-					mddev->sync_thread = NULL;
-					goto no_thread;
-				}
-			}
 			mddev->sync_thread = md_register_thread(md_do_sync,
 								mddev,
 								"resync");
@@ -8375,7 +8382,6 @@ void md_check_recovery(struct mddev *mddev)
 				printk(KERN_ERR "%s: could not start resync"
 					" thread...\n", 
 					mdname(mddev));
-			no_thread:
 				/* leave the spares where they are, it shouldn't hurt */
 				clear_bit(MD_RECOVERY_RUNNING, &mddev->recovery);
 				clear_bit(MD_RECOVERY_SYNC, &mddev->recovery);
