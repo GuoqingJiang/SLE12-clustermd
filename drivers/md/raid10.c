@@ -1320,8 +1320,10 @@ static void make_request(struct mddev *mddev, struct bio * bio)
 		/* Need to update reshape_position in metadata */
 		raid10_log(mddev, "reshape metadata delay");
 		mddev->reshape_position = conf->reshape_progress;
+		spin_lock_irq(&mddev->write_lock);
 		set_bit(MD_CHANGE_DEVS, &mddev->flags);
 		set_bit(MD_CHANGE_PENDING, &mddev->flags);
+		spin_unlock_irq(&mddev->write_lock);
 		md_wakeup_thread(mddev->thread);
 		wait_event(mddev->sb_wait,
 			   !test_bit(MD_CHANGE_PENDING, &mddev->flags));
