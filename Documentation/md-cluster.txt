@@ -174,3 +174,7 @@ to be added. For this, the following algorithm is used:
     9. If not (get no-new-dev lock), it fails the operation and sends METADATA_UPDATED
     10. Other nodes get the information whether a disk is added or not
 	by the following METADATA_UPDATED.
+
+6. Unsupported features
+There are somethings which are not supported by cluster MD yet.
+ - update size and change array_sectors.
