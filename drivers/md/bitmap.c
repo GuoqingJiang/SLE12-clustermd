@@ -916,7 +916,7 @@ static void bitmap_file_set_bit(struct bitmap *bitmap, sector_t block)
 	else
 		set_bit_le(bit, kaddr);
 	kunmap_atomic(kaddr);
-	pr_debug("set file bit %lu page %lu\n", bit, page->index);
+	printk("bsc#971908 set file bit %lu page %lu\n", bit, page->index);
 	/* record page number so it gets flushed to disk when unplug occurs */
 	set_page_attr(bitmap, page->index, BITMAP_PAGE_DIRTY);
 }
@@ -937,11 +937,15 @@ static void bitmap_file_clear_bit(struct bitmap *bitmap, sector_t block)
 		clear_bit(bit, paddr);
 	else
 		clear_bit_le(bit, paddr);
+	if (bit == 2111)
+		WARN_ON(1);
 	kunmap_atomic(paddr);
 	if (!test_page_attr(bitmap, page->index, BITMAP_PAGE_NEEDWRITE)) {
 		set_page_attr(bitmap, page->index, BITMAP_PAGE_PENDING);
 		bitmap->allclean = 0;
 	}
+	printk("bsc#971908 clear file bit %lu page %lu allclean=%d\n",
+		bit, page->index, bitmap->allclean);
 }
 
 static int bitmap_file_test_bit(struct bitmap *bitmap, sector_t block)
@@ -1217,13 +1221,29 @@ void bitmap_daemon_work(struct mddev *mddev)
 		mutex_unlock(&mddev->bitmap_info.mutex);
 		return;
 	}
+	printk("bsc#971908 in %s %d allclean=%d\n", __func__, __LINE__, bitmap->allclean);
 	if (time_before(jiffies, bitmap->daemon_lastrun
 			+ mddev->bitmap_info.daemon_sleep))
+	{
+		int count_pending = 0;
+		for (j = 0; j < bitmap->storage.file_pages; j++)
+			if (test_page_attr(bitmap, j, BITMAP_PAGE_PENDING))
+				count_pending++;
+		printk("bsc#971908 in %s %d allclean=%d, %d pages are pending\n",
+			__func__, __LINE__, bitmap->allclean, count_pending);
 		goto done;
+	}
 
 	bitmap->daemon_lastrun = jiffies;
+	printk("bsc#971908 in %s %d allclean=%d\n", __func__, __LINE__, bitmap->allclean);
 	if (bitmap->allclean) {
 		mddev->thread->timeout = MAX_SCHEDULE_TIMEOUT;
+		int count_pending = 0;
+		for (j = 0; j < bitmap->storage.file_pages; j++)
+			if (test_page_attr(bitmap, j, BITMAP_PAGE_PENDING))
+				count_pending++;
+		printk("bsc#971908 in %s %d allclean=%d, %d pages are pending\n",
+			__func__, __LINE__, bitmap->allclean, count_pending);
 		goto done;
 	}
 	bitmap->allclean = 1;
@@ -1321,6 +1341,19 @@ void bitmap_daemon_work(struct mddev *mddev)
 		}
 	}
 
+	int t0 = 0, t1 = 0, t2 = 0;
+	for (j = 0; j < bitmap->storage.file_pages; j++) {
+		if (test_page_attr(bitmap, j, BITMAP_PAGE_PENDING))
+			t0++;
+		if (test_page_attr(bitmap, j, BITMAP_PAGE_DIRTY))
+			t1++;
+		if (test_page_attr(bitmap, j, BITMAP_PAGE_NEEDWRITE))
+			t2++;
+	}
+	printk("bsc#971908 in %s %d %d pages are BITMAP_PAGE_DIRTY\n", __func__, __LINE__, t0);
+	printk("bsc#971908 in %s %d allclean=%d, %d pages are BITMAP_PAGE_DIRTY\n",
+		__func__, __LINE__,bitmap->allclean,t1);
+	printk("bsc#971908 in %s %d %d pages are BITMAP_PAGE_NEEDWRITE\n", __func__, __LINE__, t2);
  done:
 	if (bitmap->allclean == 0)
 		mddev->thread->timeout =
@@ -1917,6 +1950,7 @@ int bitmap_copy_from_slot(struct mddev *mddev, int slot,
 		goto err;
 
 	counts = &bitmap->counts;
+	printk("bsc#971908 in %s %d allclean=%d\n", __func__, __LINE__, bitmap->allclean);
 	for (j = 0; j < counts->chunks; j++) {
 		block = (sector_t)j << counts->chunkshift;
 		if (bitmap_file_test_bit(bitmap, block)) {
@@ -1924,6 +1958,7 @@ int bitmap_copy_from_slot(struct mddev *mddev, int slot,
 				lo = block;
 			hi = block;
 			bitmap_file_clear_bit(bitmap, block);
+			printk("bsc#971908 in %s %d allclean=%d\n", __func__, __LINE__, mddev->bitmap->allclean);
 			bitmap_set_memory_bits(mddev->bitmap, block, 1);
 			bitmap_file_set_bit(mddev->bitmap, block);
 		}

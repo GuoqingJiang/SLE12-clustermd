@@ -8253,7 +8253,11 @@ void md_check_recovery(struct mddev *mddev)
 		return;
 
 	if (mddev->bitmap)
+	{
+		printk("bsc#971908 in %s %d daemon_sleep=%lu\n",
+			__func__, __LINE__, mddev->bitmap_info.daemon_sleep);
 		bitmap_daemon_work(mddev);
+	}
 
 	if (signal_pending(current)) {
 		if (mddev->pers->sync_request && !mddev->external) {
